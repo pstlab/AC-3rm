@@ -1,8 +1,8 @@
 use crate::{
-    constraint::{Constraint, ConstraintEntry},
+    constraint::ConstraintEntry,
     var::{ValueState, Variable},
 };
-pub use constraint::ConstraintId;
+pub use constraint::{Constraint, ConstraintId};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
