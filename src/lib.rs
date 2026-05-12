@@ -90,10 +90,10 @@ impl Engine {
     /// # Example
     /// ```
     /// let mut engine = ac3rm::Engine::new();
-    /// let x = engine.add_variable([1, 2, 3]);
+    /// let x = engine.add_var([1, 2, 3]);
     /// assert_eq!(engine.val(x), vec![1, 2, 3]);
     /// ```
-    pub fn add_variable(&mut self, domain: impl IntoIterator<Item = i32>) -> usize {
+    pub fn add_var(&mut self, domain: impl IntoIterator<Item = i32>) -> usize {
         let mut unique = Vec::new();
         let mut seen = HashSet::new();
 
@@ -189,8 +189,8 @@ impl Engine {
     /// ```
     /// # fn main() -> Result<(), ac3rm::PropagationError> {
     /// let mut engine = ac3rm::Engine::new();
-    /// let a = engine.add_variable([1, 2, 3]);
-    /// let b = engine.add_variable([2, 3, 4]);
+    /// let a = engine.add_var([1, 2, 3]);
+    /// let b = engine.add_var([2, 3, 4]);
     /// engine.new_eq(a, b)?;  // Both now have domain {2, 3}
     /// # Ok(())
     /// # }
@@ -245,8 +245,8 @@ impl Engine {
     /// # fn main() -> Result<(), ac3rm::PropagationError> {
     /// use ac3rm::Constraint;
     /// let mut engine = ac3rm::Engine::new();
-    /// let x = engine.add_variable([1, 2, 3]);
-    /// let y = engine.add_variable([2, 3, 4]);
+    /// let x = engine.add_var([1, 2, 3]);
+    /// let y = engine.add_var([2, 3, 4]);
     /// let id1 = engine.add_constraint(Constraint::Equality(x, y));
     /// let id2 = engine.add_constraint(Constraint::Set(x, 2));
     /// engine.assert_batch(&[id1, id2])?;  // Single propagation pass
@@ -306,7 +306,7 @@ impl Engine {
     /// # Example
     /// ```
     /// let mut engine = ac3rm::Engine::new();
-    /// let x = engine.add_variable([1, 2, 3]);
+    /// let x = engine.add_var([1, 2, 3]);
     /// engine.set_listener(x, |var_id| {
     ///     println!("Variable {} domain changed", var_id);
     /// });
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn dynamic_unary_retract_and_readd() {
         let mut ac = Engine::new();
-        let x = ac.add_variable([1, 2, 3]);
+        let x = ac.add_var([1, 2, 3]);
 
         let c = ac.add_constraint(Constraint::Forbid(x, 2));
         ac.assert(c).expect("forbid must propagate");
@@ -583,8 +583,8 @@ mod tests {
     #[test]
     fn dynamic_binary_retract_and_readd() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([2, 3, 4]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([2, 3, 4]);
 
         let eq = ac.add_constraint(Constraint::Equality(a, b));
         ac.assert(eq).expect("equality must propagate");
@@ -603,8 +603,8 @@ mod tests {
     #[test]
     fn mixed_constraints_and_selective_retraction() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([1, 2, 3]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([1, 2, 3]);
 
         let eq = ac.new_eq(a, b).expect("eq must succeed");
         let set = ac.set(a, 2).expect("set must succeed");
@@ -623,8 +623,8 @@ mod tests {
     #[test]
     fn test_basic_equality() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([2, 3, 4]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([2, 3, 4]);
 
         ac.new_eq(a, b).expect("equality must succeed");
 
@@ -636,8 +636,8 @@ mod tests {
     #[test]
     fn test_inequality_singleton_pruning() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1]);
-        let b = ac.add_variable([1, 2, 3]);
+        let a = ac.add_var([1]);
+        let b = ac.add_var([1, 2, 3]);
 
         ac.new_neq(a, b).expect("inequality must succeed");
 
@@ -648,9 +648,9 @@ mod tests {
     #[test]
     fn test_multiple_suppression_logic() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([1]);
-        let c = ac.add_variable([1]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([1]);
+        let c = ac.add_var([1]);
 
         // Constraint 0: a != b  => a: {2, 3}
         let id0 = ac.new_neq(a, b).expect("first neq must succeed");
@@ -673,10 +673,10 @@ mod tests {
     #[test]
     fn test_diamond_chain_propagation() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([2, 3, 4]);
-        let c = ac.add_variable([2, 3, 4]);
-        let d = ac.add_variable([3, 4, 5]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([2, 3, 4]);
+        let c = ac.add_var([2, 3, 4]);
+        let d = ac.add_var([3, 4, 5]);
 
         // Setup chain: a == b, b == d, a == c, c == d
         ac.new_eq(a, b).expect("a==b");
@@ -692,9 +692,9 @@ mod tests {
     fn test_inequality_chain_reaction() {
         let mut ac = Engine::new();
         // A chain where narrowing one forces another via inequalities
-        let a = ac.add_variable([1]);
-        let b = ac.add_variable([1, 2]);
-        let c = ac.add_variable([2, 3]);
+        let a = ac.add_var([1]);
+        let b = ac.add_var([1, 2]);
+        let c = ac.add_var([2, 3]);
 
         ac.new_neq(a, b).expect("a!=b"); // forces b to {2}
         ac.new_neq(b, c).expect("b!=c"); // forces c to {3}
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn test_set_constraint_and_retraction() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
+        let a = ac.add_var([1, 2, 3]);
 
         let set_id = ac.set(a, 2).expect("set must succeed");
         assert_eq!(ac.val(a), vec![2]);
@@ -718,7 +718,7 @@ mod tests {
     #[test]
     fn test_forbid_constraint_and_retraction() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
+        let a = ac.add_var([1, 2, 3]);
 
         let forbid_id = ac.forbid(a, 2).expect("forbid must succeed");
         assert_eq!(ac.val(a), vec![1, 3]);
@@ -730,8 +730,8 @@ mod tests {
     #[test]
     fn test_set_with_binary_interaction_and_retraction() {
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([2, 3]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([2, 3]);
 
         let eq_id = ac.new_eq(a, b).expect("equality must succeed");
         let set_id = ac.set(a, 2).expect("set must succeed");
@@ -755,9 +755,9 @@ mod tests {
     fn test_assert_batch_equivalence() {
         // assert_batch should produce same results as sequential assert calls
         let mut ac1 = Engine::new();
-        let a1 = ac1.add_variable([1, 2, 3]);
-        let b1 = ac1.add_variable([2, 3, 4]);
-        let c1 = ac1.add_variable([3, 4, 5]);
+        let a1 = ac1.add_var([1, 2, 3]);
+        let b1 = ac1.add_var([2, 3, 4]);
+        let c1 = ac1.add_var([3, 4, 5]);
 
         let id0 = ac1.add_constraint(Constraint::Equality(a1, b1));
         let id1 = ac1.add_constraint(Constraint::Equality(b1, c1));
@@ -767,9 +767,9 @@ mod tests {
 
         // Separate sequential calls
         let mut ac2 = Engine::new();
-        let a2 = ac2.add_variable([1, 2, 3]);
-        let b2 = ac2.add_variable([2, 3, 4]);
-        let c2 = ac2.add_variable([3, 4, 5]);
+        let a2 = ac2.add_var([1, 2, 3]);
+        let b2 = ac2.add_var([2, 3, 4]);
+        let c2 = ac2.add_var([3, 4, 5]);
 
         let id0 = ac2.add_constraint(Constraint::Equality(a2, b2));
         let id1 = ac2.add_constraint(Constraint::Equality(b2, c2));
@@ -789,18 +789,18 @@ mod tests {
     fn test_retract_batch_equivalence() {
         // Create two identical engines with constraints
         let mut ac1 = Engine::new();
-        let a1 = ac1.add_variable([1, 2, 3]);
-        let b1 = ac1.add_variable([1, 2, 3]);
-        let c1 = ac1.add_variable([1, 2, 3]);
+        let a1 = ac1.add_var([1, 2, 3]);
+        let b1 = ac1.add_var([1, 2, 3]);
+        let c1 = ac1.add_var([1, 2, 3]);
 
         let id0 = ac1.new_eq(a1, b1).expect("eq 0");
         let id1 = ac1.new_neq(b1, c1).expect("neq 1");
         let id2 = ac1.set(a1, 2).expect("set 2");
 
         let mut ac2 = Engine::new();
-        let a2 = ac2.add_variable([1, 2, 3]);
-        let b2 = ac2.add_variable([1, 2, 3]);
-        let c2 = ac2.add_variable([1, 2, 3]);
+        let a2 = ac2.add_var([1, 2, 3]);
+        let b2 = ac2.add_var([1, 2, 3]);
+        let c2 = ac2.add_var([1, 2, 3]);
 
         let id0_2 = ac2.new_eq(a2, b2).expect("eq 0");
         let id1_2 = ac2.new_neq(b2, c2).expect("neq 1");
@@ -825,8 +825,8 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         let mut ac = Engine::new();
-        let a = ac.add_variable([1, 2, 3]);
-        let b = ac.add_variable([2, 3, 4]);
+        let a = ac.add_var([1, 2, 3]);
+        let b = ac.add_var([2, 3, 4]);
 
         // Track notifications
         let notified_vars = Arc::new(Mutex::new(Vec::new()));
