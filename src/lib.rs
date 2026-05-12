@@ -4,31 +4,49 @@ use std::{
 };
 use tracing::trace;
 
-type Callback = Box<dyn Fn(usize)>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VarId(pub usize);
+
+impl fmt::Display for VarId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "e{}", self.0)
+    }
+}
+
+type Callback = Box<dyn Fn(VarId)>;
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    Equality(usize, usize),   // Represents an equality constraint between two variables (e.g., x_i == x_j).
-    Inequality(usize, usize), // Represents an inequality constraint between two variables (e.g., x_i != x_j).
-    Set(usize, i32),          // Represents a constraint that a variable must take a specific value (e.g., x_i == 5).
-    Forbid(usize, i32),       // Represents a constraint that a variable cannot take a specific value (e.g., x_i != 5).
+    Equality(VarId, VarId),   // Represents an equality constraint between two variables (e.g., x_i == x_j).
+    Inequality(VarId, VarId), // Represents an inequality constraint between two variables (e.g., x_i != x_j).
+    Set(VarId, i32),          // Represents a constraint that a variable must take a specific value (e.g., x_i == 5).
+    Forbid(VarId, i32),       // Represents a constraint that a variable cannot take a specific value (e.g., x_i != 5).
 }
 
 impl fmt::Display for Constraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Constraint::Equality(var1, var2) => write!(f, "e{} == e{}", var1, var2),
-            Constraint::Inequality(var1, var2) => write!(f, "e{} != e{}", var1, var2),
-            Constraint::Set(var, value) => write!(f, "e{} == {}", var, value),
-            Constraint::Forbid(var, value) => write!(f, "e{} != {}", var, value),
+            Constraint::Equality(var1, var2) => write!(f, "{} == {}", var1, var2),
+            Constraint::Inequality(var1, var2) => write!(f, "{} != {}", var1, var2),
+            Constraint::Set(var, value) => write!(f, "{} == {}", var, value),
+            Constraint::Forbid(var, value) => write!(f, "{} != {}", var, value),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstraintId(pub usize);
+
+impl fmt::Display for ConstraintId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "c{}", self.0)
     }
 }
 
 #[derive(Debug, Clone)]
 struct ValueState {
     value: i32,
-    killers: HashSet<usize>,
+    killers: HashSet<ConstraintId>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,23 +63,23 @@ struct ConstraintEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropagationError {
-    InvalidConstraintId(usize),
-    DomainWipeout { var: usize, explanation: Vec<usize> },
+    InvalidConstraintId(ConstraintId),
+    DomainWipeout { var: VarId, explanation: Vec<ConstraintId> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Arc {
-    constraint_id: usize,
-    from: usize,
-    to: usize,
+    constraint_id: ConstraintId,
+    from: VarId,
+    to: VarId,
 }
 
 pub struct Engine {
     variables: Vec<Variable>,
     constraints: Vec<ConstraintEntry>,
     // Key: (constraint_id, from_var, to_var, from_value) -> supporting to_value.
-    residues: HashMap<(usize, usize, usize, i32), i32>,
-    listeners: HashMap<usize, Vec<Callback>>,
+    residues: HashMap<(ConstraintId, VarId, VarId, i32), i32>,
+    listeners: HashMap<VarId, Vec<Callback>>,
 }
 
 impl Default for Engine {
@@ -94,7 +112,7 @@ impl Engine {
     /// let x = engine.add_var([1, 2, 3]);
     /// assert_eq!(engine.val(x), vec![1, 2, 3]);
     /// ```
-    pub fn add_var(&mut self, domain: impl IntoIterator<Item = i32>) -> usize {
+    pub fn add_var(&mut self, domain: impl IntoIterator<Item = i32>) -> VarId {
         let mut unique = Vec::new();
         let mut seen = HashSet::new();
 
@@ -115,7 +133,7 @@ impl Engine {
         let id = self.variables.len();
         trace!("Adding variable e{} with domain {{{}}}", id, states.iter().map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
         self.variables.push(Variable { domain: states, index_by_value });
-        id
+        VarId(id)
     }
 
     /// Returns the currently active domain values of a variable.
@@ -124,18 +142,18 @@ impl Engine {
     ///
     /// # Panics
     /// Panics if `var_id` is not a valid variable ID.
-    pub fn val(&self, var_id: usize) -> Vec<i32> {
-        self.variables[var_id].domain.iter().filter_map(|state| if state.killers.is_empty() { Some(state.value) } else { None }).collect()
+    pub fn val(&self, var_id: VarId) -> Vec<i32> {
+        self.variables[var_id.0].domain.iter().filter_map(|state| if state.killers.is_empty() { Some(state.value) } else { None }).collect()
     }
 
     /// Adds a constraint to the engine without activating it.
     ///
     /// Returns the constraint ID. Use `assert` to activate it and trigger propagation.
-    pub fn add_constraint(&mut self, constraint: Constraint) -> usize {
+    pub fn add_constraint(&mut self, constraint: Constraint) -> ConstraintId {
         let id = self.constraints.len();
         trace!("Adding constraint c{}: {}", id, constraint);
         self.constraints.push(ConstraintEntry { active: false, kind: constraint });
-        id
+        ConstraintId(id)
     }
 
     /// Activates a constraint and propagates its effects.
@@ -144,14 +162,14 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError` if propagation causes a domain wipeout (no solution exists).
-    pub fn assert(&mut self, constraint_id: usize) -> Result<(), PropagationError> {
-        trace!("Activating constraint c{}", self.constraints[constraint_id].kind);
+    pub fn assert(&mut self, constraint_id: ConstraintId) -> Result<(), PropagationError> {
+        trace!("Activating constraint c{}", self.constraints[constraint_id.0].kind);
         let touched = self.constraint_vars(constraint_id)?;
-        if self.constraints[constraint_id].active {
+        if self.constraints[constraint_id.0].active {
             return Ok(());
         }
 
-        self.constraints[constraint_id].active = true;
+        self.constraints[constraint_id.0].active = true;
         self.propagate_from_vars(&touched)
     }
 
@@ -164,17 +182,17 @@ impl Engine {
     /// # Errors
     /// Returns `PropagationError` if re-propagation unexpectedly causes a domain wipeout.
     /// This should not happen in normal operation.
-    pub fn retract(&mut self, constraint_id: usize) -> Result<(), PropagationError> {
-        trace!("Deactivating constraint c{}", self.constraints[constraint_id].kind);
+    pub fn retract(&mut self, constraint_id: ConstraintId) -> Result<(), PropagationError> {
+        trace!("Deactivating constraint c{}", self.constraints[constraint_id.0].kind);
         let touched = self.constraint_vars(constraint_id)?;
-        if !self.constraints[constraint_id].active {
+        if !self.constraints[constraint_id.0].active {
             return Ok(());
         }
 
-        self.constraints[constraint_id].active = false;
+        self.constraints[constraint_id.0].active = false;
 
         for &var in &touched {
-            for state in &mut self.variables[var].domain {
+            for state in &mut self.variables[var.0].domain {
                 state.killers.remove(&constraint_id);
             }
         }
@@ -200,7 +218,7 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new_eq(&mut self, a: usize, b: usize) -> Result<usize, PropagationError> {
+    pub fn new_eq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
         let id = self.add_constraint(Constraint::Equality(a, b));
         self.assert(id)?;
         Ok(id)
@@ -210,7 +228,7 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if a domain becomes empty.
-    pub fn new_neq(&mut self, a: usize, b: usize) -> Result<usize, PropagationError> {
+    pub fn new_neq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
         let id = self.add_constraint(Constraint::Inequality(a, b));
         self.assert(id)?;
         Ok(id)
@@ -220,7 +238,7 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if the value is not in the variable's domain.
-    pub fn set(&mut self, var: usize, value: i32) -> Result<usize, PropagationError> {
+    pub fn set(&mut self, var: VarId, value: i32) -> Result<ConstraintId, PropagationError> {
         let id = self.add_constraint(Constraint::Set(var, value));
         self.assert(id)?;
         Ok(id)
@@ -230,7 +248,7 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if the value is the only value in the domain.
-    pub fn forbid(&mut self, var: usize, value: i32) -> Result<usize, PropagationError> {
+    pub fn forbid(&mut self, var: VarId, value: i32) -> Result<ConstraintId, PropagationError> {
         let id = self.add_constraint(Constraint::Forbid(var, value));
         self.assert(id)?;
         Ok(id)
@@ -258,14 +276,14 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn assert_batch(&mut self, constraint_ids: &[usize]) -> Result<(), PropagationError> {
+    pub fn assert_batch(&mut self, constraint_ids: &[ConstraintId]) -> Result<(), PropagationError> {
         let mut all_touched = HashSet::new();
 
         for &id in constraint_ids {
-            trace!("Activating constraint c{}", self.constraints[id].kind);
+            trace!("Activating constraint c{}", self.constraints[id.0].kind);
             let touched = self.constraint_vars(id)?;
-            if !self.constraints[id].active {
-                self.constraints[id].active = true;
+            if !self.constraints[id.0].active {
+                self.constraints[id.0].active = true;
                 all_touched.extend(touched);
             }
         }
@@ -280,17 +298,17 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError` if re-propagation causes an unexpected domain wipeout.
-    pub fn retract_batch(&mut self, constraint_ids: &[usize]) -> Result<(), PropagationError> {
+    pub fn retract_batch(&mut self, constraint_ids: &[ConstraintId]) -> Result<(), PropagationError> {
         let mut all_touched = HashSet::new();
 
         for &id in constraint_ids {
-            trace!("Deactivating constraint c{}", self.constraints[id].kind);
+            trace!("Deactivating constraint c{}", self.constraints[id.0].kind);
             let touched = self.constraint_vars(id)?;
-            if self.constraints[id].active {
-                self.constraints[id].active = false;
+            if self.constraints[id.0].active {
+                self.constraints[id.0].active = false;
 
                 for &var in &touched {
-                    for state in &mut self.variables[var].domain {
+                    for state in &mut self.variables[var.0].domain {
                         state.killers.remove(&id);
                     }
                 }
@@ -318,14 +336,14 @@ impl Engine {
     ///     println!("Variable {} domain changed", var_id);
     /// });
     /// ```
-    pub fn set_listener<F>(&mut self, var: usize, callback: F)
+    pub fn set_listener<F>(&mut self, var: VarId, callback: F)
     where
-        F: Fn(usize) + 'static,
+        F: Fn(VarId) + 'static,
     {
         self.listeners.entry(var).or_default().push(Box::new(callback));
     }
 
-    fn notify_listeners(&self, var: usize) {
+    fn notify_listeners(&self, var: VarId) {
         if let Some(cbs) = self.listeners.get(&var) {
             for cb in cbs {
                 cb(var);
@@ -333,8 +351,8 @@ impl Engine {
         }
     }
 
-    fn constraint_vars(&self, constraint_id: usize) -> Result<Vec<usize>, PropagationError> {
-        let Some(entry) = self.constraints.get(constraint_id) else {
+    fn constraint_vars(&self, constraint_id: ConstraintId) -> Result<Vec<VarId>, PropagationError> {
+        let Some(entry) = self.constraints.get(constraint_id.0) else {
             return Err(PropagationError::InvalidConstraintId(constraint_id));
         };
 
@@ -352,8 +370,8 @@ impl Engine {
         Ok(vars)
     }
 
-    fn arcs_of(&self, constraint_id: usize) -> Vec<Arc> {
-        match self.constraints[constraint_id].kind {
+    fn arcs_of(&self, constraint_id: ConstraintId) -> Vec<Arc> {
+        match self.constraints[constraint_id.0].kind {
             Constraint::Equality(a, b) | Constraint::Inequality(a, b) => {
                 if a == b {
                     vec![Arc { constraint_id, from: a, to: b }]
@@ -367,7 +385,7 @@ impl Engine {
         }
     }
 
-    fn touching_constraints(&self, var: usize) -> Vec<usize> {
+    fn touching_constraints(&self, var: VarId) -> Vec<ConstraintId> {
         self.constraints
             .iter()
             .enumerate()
@@ -381,12 +399,12 @@ impl Engine {
                     Constraint::Set(v, _) | Constraint::Forbid(v, _) => v == var,
                 };
 
-                if touches { Some(id) } else { None }
+                if touches { Some(ConstraintId(id)) } else { None }
             })
             .collect()
     }
 
-    fn propagate_from_vars(&mut self, vars: &[usize]) -> Result<(), PropagationError> {
+    fn propagate_from_vars(&mut self, vars: &[VarId]) -> Result<(), PropagationError> {
         trace!("Starting propagation from variables: {:?}", vars);
         let mut queue = VecDeque::new();
         let mut in_queue = HashSet::new();
@@ -402,10 +420,10 @@ impl Engine {
         }
 
         while let Some(arc) = queue.pop_front() {
-            trace!("Processing arc: {} (from e{} to e{})", self.constraints[arc.constraint_id].kind, arc.from, arc.to);
+            trace!("Processing arc: {} (from e{} to e{})", self.constraints[arc.constraint_id.0].kind, arc.from, arc.to);
             in_queue.remove(&arc);
 
-            if !self.constraints[arc.constraint_id].active {
+            if !self.constraints[arc.constraint_id.0].active {
                 continue;
             }
 
@@ -426,7 +444,7 @@ impl Engine {
     }
 
     fn revise(&mut self, arc: Arc) -> Result<bool, PropagationError> {
-        match self.constraints[arc.constraint_id].kind {
+        match self.constraints[arc.constraint_id.0].kind {
             Constraint::Set(_, expected) => self.revise_unary(arc.constraint_id, arc.from, |a| a == expected),
             Constraint::Forbid(_, forbidden) => self.revise_unary(arc.constraint_id, arc.from, |a| a != forbidden),
             Constraint::Equality(_, _) => self.revise_binary(arc.constraint_id, arc.from, arc.to, |a, b| a == b),
@@ -434,13 +452,13 @@ impl Engine {
         }
     }
 
-    fn revise_unary<F>(&mut self, cid: usize, var: usize, predicate: F) -> Result<bool, PropagationError>
+    fn revise_unary<F>(&mut self, cid: ConstraintId, var: VarId, predicate: F) -> Result<bool, PropagationError>
     where
         F: Fn(i32) -> bool,
     {
         let mut changed = false;
 
-        for state in &mut self.variables[var].domain {
+        for state in &mut self.variables[var.0].domain {
             let was_active = state.killers.is_empty();
             if predicate(state.value) {
                 state.killers.remove(&cid);
@@ -459,25 +477,25 @@ impl Engine {
         }
 
         if changed {
-            trace!("Variable e{} domain is now {{{}}}", var, self.variables[var].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
+            trace!("Variable e{} domain is now {{{}}}", var, self.variables[var.0].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(var);
         }
 
         Ok(changed)
     }
 
-    fn revise_binary<F>(&mut self, cid: usize, from: usize, to: usize, relation: F) -> Result<bool, PropagationError>
+    fn revise_binary<F>(&mut self, cid: ConstraintId, from: VarId, to: VarId, relation: F) -> Result<bool, PropagationError>
     where
         F: Fn(i32, i32) -> bool,
     {
         let mut changed = false;
 
-        let from_values: Vec<i32> = self.variables[from].domain.iter().map(|s| s.value).collect();
+        let from_values: Vec<i32> = self.variables[from.0].domain.iter().map(|s| s.value).collect();
 
         for a in from_values {
             let has_support = self.has_support(cid, from, to, a, &relation);
-            let idx = self.variables[from].index_by_value[&a];
-            let state = &mut self.variables[from].domain[idx];
+            let idx = self.variables[from.0].index_by_value[&a];
+            let state = &mut self.variables[from.0].domain[idx];
             let was_active = state.killers.is_empty();
 
             if has_support {
@@ -497,14 +515,14 @@ impl Engine {
         }
 
         if changed {
-            trace!("Variable e{} domain is now {{{}}}", from, self.variables[from].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
+            trace!("Variable e{} domain is now {{{}}}", from, self.variables[from.0].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(from);
         }
 
         Ok(changed)
     }
 
-    fn has_support<F>(&mut self, cid: usize, from: usize, to: usize, a: i32, relation: &F) -> bool
+    fn has_support<F>(&mut self, cid: ConstraintId, from: VarId, to: VarId, a: i32, relation: &F) -> bool
     where
         F: Fn(i32, i32) -> bool,
     {
@@ -517,7 +535,7 @@ impl Engine {
             return true;
         }
 
-        for state in &self.variables[to].domain {
+        for state in &self.variables[to.0].domain {
             if !state.killers.is_empty() {
                 continue;
             }
@@ -531,20 +549,20 @@ impl Engine {
         false
     }
 
-    fn is_active_value(&self, var: usize, value: i32) -> bool {
-        let Some(&idx) = self.variables[var].index_by_value.get(&value) else {
+    fn is_active_value(&self, var: VarId, value: i32) -> bool {
+        let Some(&idx) = self.variables[var.0].index_by_value.get(&value) else {
             return false;
         };
-        self.variables[var].domain[idx].killers.is_empty()
+        self.variables[var.0].domain[idx].killers.is_empty()
     }
 
-    fn has_active_value(&self, var: usize) -> bool {
-        self.variables[var].domain.iter().any(|s| s.killers.is_empty())
+    fn has_active_value(&self, var: VarId) -> bool {
+        self.variables[var.0].domain.iter().any(|s| s.killers.is_empty())
     }
 
-    fn wipeout(&self, var: usize) -> PropagationError {
+    fn wipeout(&self, var: VarId) -> PropagationError {
         let mut explanation = HashSet::new();
-        for state in &self.variables[var].domain {
+        for state in &self.variables[var.0].domain {
             for &cid in &state.killers {
                 explanation.insert(cid);
             }
