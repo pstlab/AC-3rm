@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
+use tracing::trace;
 
 type Callback = Box<dyn Fn(usize)>;
 
@@ -112,6 +113,7 @@ impl Engine {
         }
 
         let id = self.variables.len();
+        trace!("Adding variable e{} with domain {{{}}}", id, states.iter().map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
         self.variables.push(Variable { domain: states, index_by_value });
         id
     }
@@ -131,6 +133,7 @@ impl Engine {
     /// Returns the constraint ID. Use `assert` to activate it and trigger propagation.
     pub fn add_constraint(&mut self, constraint: Constraint) -> usize {
         let id = self.constraints.len();
+        trace!("Adding constraint c{}: {}", id, constraint);
         self.constraints.push(ConstraintEntry { active: false, kind: constraint });
         id
     }
@@ -142,6 +145,7 @@ impl Engine {
     /// # Errors
     /// Returns `PropagationError` if propagation causes a domain wipeout (no solution exists).
     pub fn assert(&mut self, constraint_id: usize) -> Result<(), PropagationError> {
+        trace!("Activating constraint c{}", self.constraints[constraint_id].kind);
         let touched = self.constraint_vars(constraint_id)?;
         if self.constraints[constraint_id].active {
             return Ok(());
@@ -161,6 +165,7 @@ impl Engine {
     /// Returns `PropagationError` if re-propagation unexpectedly causes a domain wipeout.
     /// This should not happen in normal operation.
     pub fn retract(&mut self, constraint_id: usize) -> Result<(), PropagationError> {
+        trace!("Deactivating constraint c{}", self.constraints[constraint_id].kind);
         let touched = self.constraint_vars(constraint_id)?;
         if !self.constraints[constraint_id].active {
             return Ok(());
@@ -257,6 +262,7 @@ impl Engine {
         let mut all_touched = HashSet::new();
 
         for &id in constraint_ids {
+            trace!("Activating constraint c{}", self.constraints[id].kind);
             let touched = self.constraint_vars(id)?;
             if !self.constraints[id].active {
                 self.constraints[id].active = true;
@@ -278,6 +284,7 @@ impl Engine {
         let mut all_touched = HashSet::new();
 
         for &id in constraint_ids {
+            trace!("Deactivating constraint c{}", self.constraints[id].kind);
             let touched = self.constraint_vars(id)?;
             if self.constraints[id].active {
                 self.constraints[id].active = false;
@@ -380,6 +387,7 @@ impl Engine {
     }
 
     fn propagate_from_vars(&mut self, vars: &[usize]) -> Result<(), PropagationError> {
+        trace!("Starting propagation from variables: {:?}", vars);
         let mut queue = VecDeque::new();
         let mut in_queue = HashSet::new();
 
@@ -394,6 +402,7 @@ impl Engine {
         }
 
         while let Some(arc) = queue.pop_front() {
+            trace!("Processing arc: {} (from e{} to e{})", self.constraints[arc.constraint_id].kind, arc.from, arc.to);
             in_queue.remove(&arc);
 
             if !self.constraints[arc.constraint_id].active {
@@ -450,6 +459,7 @@ impl Engine {
         }
 
         if changed {
+            trace!("Variable e{} domain is now {{{}}}", var, self.variables[var].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(var);
         }
 
@@ -487,6 +497,7 @@ impl Engine {
         }
 
         if changed {
+            trace!("Variable e{} domain is now {{{}}}", from, self.variables[from].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(from);
         }
 

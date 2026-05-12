@@ -11,3 +11,4 @@ keywords = ["constraints", "arc-consistency", "ac3", "ac3rm", "csp"]
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
+tracing = "0.1.44"
