@@ -315,7 +315,7 @@ impl Engine {
     where
         F: Fn(usize) + 'static,
     {
-        self.listeners.entry(var).or_insert_with(Vec::new).push(Box::new(callback));
+        self.listeners.entry(var).or_default().push(Box::new(callback));
     }
 
     fn notify_listeners(&self, var: usize) {
@@ -405,10 +405,8 @@ impl Engine {
                 // Re-queue only incoming arcs: Y_i -> X_j where X_j = arc.from
                 for cid in self.touching_constraints(arc.from) {
                     for next_arc in self.arcs_of(cid) {
-                        if next_arc.to == arc.from && next_arc != arc {
-                            if in_queue.insert(next_arc) {
-                                queue.push_back(next_arc);
-                            }
+                        if next_arc.to == arc.from && next_arc != arc && in_queue.insert(next_arc) {
+                            queue.push_back(next_arc);
                         }
                     }
                 }
