@@ -63,20 +63,20 @@ ac3rm = "0.1"
 ```rust
 use ac3rm::Engine;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), ac3rm::PropagationError> {
     let mut engine = Engine::new();
 
     // Create variables
-    let a = engine.add_variable([1, 2, 3]);
-    let b = engine.add_variable([2, 3, 4]);
+    let a = engine.add_var([1, 2, 3]);
+    let b = engine.add_var([2, 3, 4]);
 
     // Add equality constraint
     engine.new_eq(a, b)?;
-    
+
     // Domains are now intersected: {2, 3}
     assert_eq!(engine.val(a), vec![2, 3]);
     assert_eq!(engine.val(b), vec![2, 3]);
-    
+
     Ok(())
 }
 ```
@@ -86,22 +86,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 use ac3rm::Engine;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut engine = Engine::new();
-let a = engine.add_variable([1, 2, 3]);
-let b = engine.add_variable([2, 3, 4]);
+fn main() -> Result<(), ac3rm::PropagationError> {
+    let mut engine = Engine::new();
+    let a = engine.add_var([1, 2, 3]);
+    let b = engine.add_var([2, 3, 4]);
 
-let eq_id = engine.new_eq(a, b)?;
-assert_eq!(engine.val(a), vec![2, 3]);
+    let eq_id = engine.new_eq(a, b)?;
+    assert_eq!(engine.val(a), vec![2, 3]);
 
-// Remove the constraint
-engine.retract(eq_id)?;
+    // Remove the constraint
+    engine.retract(eq_id)?;
 
-// Domains return to original state
-assert_eq!(engine.val(a), vec![1, 2, 3]);
-assert_eq!(engine.val(b), vec![2, 3, 4]);
+    // Domains return to original state
+    assert_eq!(engine.val(a), vec![1, 2, 3]);
+    assert_eq!(engine.val(b), vec![2, 3, 4]);
 
-Ok(())
+    Ok(())
 }
 ```
 
@@ -110,19 +110,19 @@ Ok(())
 ```rust
 use ac3rm::{Constraint, Engine};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut engine = Engine::new();
-let x = engine.add_variable([1, 2, 3]);
-let y = engine.add_variable([1, 2, 3]);
+fn main() -> Result<(), ac3rm::PropagationError> {
+    let mut engine = Engine::new();
+    let x = engine.add_var([1, 2, 3]);
+    let y = engine.add_var([1, 2, 3]);
 
-let c1 = engine.add_constraint(Constraint::Equality(x, y));
-let c2 = engine.add_constraint(Constraint::Set(x, 2));
-let c3 = engine.add_constraint(Constraint::Forbid(y, 1));
+    let c1 = engine.add_constraint(Constraint::Equality(x, y));
+    let c2 = engine.add_constraint(Constraint::Set(x, 2));
+    let c3 = engine.add_constraint(Constraint::Forbid(y, 1));
 
-// Apply all three constraints with a single propagation pass
-engine.assert_batch(&[c1, c2, c3])?;
+    // Apply all three constraints with a single propagation pass
+    engine.assert_batch(&[c1, c2, c3])?;
 
-Ok(())
+    Ok(())
 }
 ```
 
@@ -132,21 +132,21 @@ Ok(())
 use ac3rm::Engine;
 use std::sync::{Arc, Mutex};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut engine = Engine::new();
-let x = engine.add_variable([1, 2, 3]);
-let y = engine.add_variable([2, 3, 4]);
+fn main() -> Result<(), ac3rm::PropagationError> {
+    let mut engine = Engine::new();
+    let x = engine.add_var([1, 2, 3]);
+    let y = engine.add_var([2, 3, 4]);
 
-let changes = Arc::new(Mutex::new(Vec::new()));
-let changes_clone = changes.clone();
+    let changes = Arc::new(Mutex::new(Vec::new()));
+    let changes_clone = changes.clone();
 
-engine.set_listener(x, move |var_id| {
-    changes_clone.lock().unwrap().push(var_id);
-});
+    engine.set_listener(x, move |var_id| {
+        changes_clone.lock().unwrap().push(var_id);
+    });
 
-engine.new_eq(x, y)?;  // Triggers listener callback
+    engine.new_eq(x, y)?; // Triggers listener callback
 
-Ok(())
+    Ok(())
 }
 ```
 
