@@ -1,8 +1,13 @@
-# ac3rm
+# AC-3rm
+
+[![Rust](https://img.shields.io/badge/Rust-1.95+-orange?logo=rust)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+![Build Status](https://github.com/pstlab/AC-3rm/actions/workflows/rust.yml/badge.svg)
+[![codecov](https://codecov.io/gh/pstlab/AC-3rm/branch/main/graph/badge.svg)](https://codecov.io/gh/pstlab/AC-3rm)
 
 A highly efficient incremental Arc Consistency (AC-3rm) propagator written in Rust.
 
-**ac3rm** maintains constraint consistency dynamically, supporting:
+**AC-3rm** maintains constraint consistency dynamically, supporting:
 - **Dynamic constraint insertion** with incremental propagation
 - **Dynamic constraint retraction** with neighborhood re-propagation
 - **AC-3rm algorithm** with residual supports for optimal constraint checking
