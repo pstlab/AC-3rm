@@ -1,65 +1,19 @@
+use crate::{
+    constraint::{Constraint, ConstraintEntry},
+    var::{ValueState, Variable},
+};
+pub use constraint::ConstraintId;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
 use tracing::trace;
+pub use var::VarId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarId(pub usize);
-
-impl fmt::Display for VarId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "e{}", self.0)
-    }
-}
+mod constraint;
+mod var;
 
 type Callback = Box<dyn Fn(VarId)>;
-
-#[derive(Debug, Clone)]
-pub enum Constraint {
-    Equality(VarId, VarId),   // Represents an equality constraint between two variables (e.g., x_i == x_j).
-    Inequality(VarId, VarId), // Represents an inequality constraint between two variables (e.g., x_i != x_j).
-    Set(VarId, i32),          // Represents a constraint that a variable must take a specific value (e.g., x_i == 5).
-    Forbid(VarId, i32),       // Represents a constraint that a variable cannot take a specific value (e.g., x_i != 5).
-}
-
-impl fmt::Display for Constraint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Constraint::Equality(var1, var2) => write!(f, "{} == {}", var1, var2),
-            Constraint::Inequality(var1, var2) => write!(f, "{} != {}", var1, var2),
-            Constraint::Set(var, value) => write!(f, "{} == {}", var, value),
-            Constraint::Forbid(var, value) => write!(f, "{} != {}", var, value),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConstraintId(pub usize);
-
-impl fmt::Display for ConstraintId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "c{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ValueState {
-    value: i32,
-    killers: HashSet<ConstraintId>,
-}
-
-#[derive(Debug, Clone)]
-struct Variable {
-    domain: Vec<ValueState>,
-    index_by_value: HashMap<i32, usize>,
-}
-
-#[derive(Debug, Clone)]
-struct ConstraintEntry {
-    active: bool,
-    kind: Constraint,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropagationError {
