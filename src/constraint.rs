@@ -21,7 +21,7 @@ impl fmt::Display for Constraint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConstraintId(pub usize);
+pub struct ConstraintId(pub(super) usize);
 
 impl fmt::Display for ConstraintId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -5,7 +5,7 @@ use std::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarId(pub usize);
+pub struct VarId(pub(super) usize);
 
 impl fmt::Display for VarId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
