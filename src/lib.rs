@@ -179,7 +179,7 @@ impl Engine {
     /// let mut engine = ac3rm::Engine::new();
     /// let a = engine.add_var([1, 2, 3]);
     /// let b = engine.add_var([2, 3, 4]);
-    /// engine.new_eq(a, b)?;  // Both now have domain {2, 3}
+    /// engine.add_eq(a, b)?;  // Both now have domain {2, 3}
     /// # Ok(())
     /// # }
     /// ```
@@ -235,8 +235,8 @@ impl Engine {
     /// let mut engine = ac3rm::Engine::new();
     /// let x = engine.add_var([1, 2, 3]);
     /// let y = engine.add_var([2, 3, 4]);
-    /// let id1 = engine.add_constraint(Constraint::Equality(x, y));
-    /// let id2 = engine.add_constraint(Constraint::Set(x, 2));
+    /// let id1 = engine.new_constraint(Constraint::Equality(x, y));
+    /// let id2 = engine.new_constraint(Constraint::Set(x, 2));
     /// engine.assert_batch(&[id1, id2])?;  // Single propagation pass
     /// # Ok(())
     /// # }
