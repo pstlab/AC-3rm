@@ -34,6 +34,8 @@ pub struct Engine {
     // Key: (constraint_id, from_var, to_var, from_value) -> supporting to_value.
     residues: HashMap<(ConstraintId, VarId, VarId, i32), i32>,
     listeners: HashMap<VarId, Vec<Callback>>,
+    // Key: (var, value) -> set of constraint IDs that transitively explain why the value is killed.
+    prune_reasons: HashMap<(VarId, i32), HashSet<ConstraintId>>,
 }
 
 impl Default for Engine {
@@ -50,6 +52,7 @@ impl Engine {
             constraints: Vec::new(),
             residues: HashMap::new(),
             listeners: HashMap::new(),
+            prune_reasons: HashMap::new(),
         }
     }
 
@@ -103,7 +106,7 @@ impl Engine {
     /// Adds a constraint to the engine without activating it.
     ///
     /// Returns the constraint ID. Use `assert` to activate it and trigger propagation.
-    pub fn add_constraint(&mut self, constraint: Constraint) -> ConstraintId {
+    pub fn new_constraint(&mut self, constraint: Constraint) -> ConstraintId {
         let id = self.constraints.len();
         trace!("Adding constraint c{}: {}", id, constraint);
         self.constraints.push(ConstraintEntry { active: false, kind: constraint });
@@ -145,10 +148,18 @@ impl Engine {
 
         self.constraints[constraint_id.0].active = false;
 
+        let mut restored: Vec<(VarId, i32)> = Vec::new();
         for &var in &touched {
             for state in &mut self.variables[var.0].domain {
+                let was_inactive = !state.killers.is_empty();
                 state.killers.remove(&constraint_id);
+                if was_inactive && state.killers.is_empty() {
+                    restored.push((var, state.value));
+                }
             }
+        }
+        for key in restored {
+            self.prune_reasons.remove(&key);
         }
 
         self.residues.retain(|(cid, _, _, _), _| *cid != constraint_id);
@@ -172,8 +183,8 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new_eq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
-        let id = self.add_constraint(Constraint::Equality(a, b));
+    pub fn add_eq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
+        let id = self.new_constraint(Constraint::Equality(a, b));
         self.assert(id)?;
         Ok(id)
     }
@@ -182,8 +193,8 @@ impl Engine {
     ///
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if a domain becomes empty.
-    pub fn new_neq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
-        let id = self.add_constraint(Constraint::Inequality(a, b));
+    pub fn add_neq(&mut self, a: VarId, b: VarId) -> Result<ConstraintId, PropagationError> {
+        let id = self.new_constraint(Constraint::Inequality(a, b));
         self.assert(id)?;
         Ok(id)
     }
@@ -193,7 +204,7 @@ impl Engine {
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if the value is not in the variable's domain.
     pub fn set(&mut self, var: VarId, value: i32) -> Result<ConstraintId, PropagationError> {
-        let id = self.add_constraint(Constraint::Set(var, value));
+        let id = self.new_constraint(Constraint::Set(var, value));
         self.assert(id)?;
         Ok(id)
     }
@@ -203,7 +214,7 @@ impl Engine {
     /// # Errors
     /// Returns `PropagationError::DomainWipeout` if the value is the only value in the domain.
     pub fn forbid(&mut self, var: VarId, value: i32) -> Result<ConstraintId, PropagationError> {
-        let id = self.add_constraint(Constraint::Forbid(var, value));
+        let id = self.new_constraint(Constraint::Forbid(var, value));
         self.assert(id)?;
         Ok(id)
     }
@@ -254,6 +265,7 @@ impl Engine {
     /// Returns `PropagationError` if re-propagation causes an unexpected domain wipeout.
     pub fn retract_batch(&mut self, constraint_ids: &[ConstraintId]) -> Result<(), PropagationError> {
         let mut all_touched = HashSet::new();
+        let mut restored: Vec<(VarId, i32)> = Vec::new();
 
         for &id in constraint_ids {
             trace!("Deactivating constraint c{}", self.constraints[id.0].kind);
@@ -263,12 +275,20 @@ impl Engine {
 
                 for &var in &touched {
                     for state in &mut self.variables[var.0].domain {
+                        let was_inactive = !state.killers.is_empty();
                         state.killers.remove(&id);
+                        if was_inactive && state.killers.is_empty() {
+                            restored.push((var, state.value));
+                        }
                     }
                 }
 
                 all_touched.extend(touched);
             }
+        }
+
+        for key in restored {
+            self.prune_reasons.remove(&key);
         }
 
         self.residues.retain(|(cid, _, _, _), _| !constraint_ids.contains(cid));
@@ -411,6 +431,8 @@ impl Engine {
         F: Fn(i32) -> bool,
     {
         let mut changed = false;
+        let mut newly_killed: Vec<i32> = Vec::new();
+        let mut newly_restored: Vec<i32> = Vec::new();
 
         for state in &mut self.variables[var.0].domain {
             let was_active = state.killers.is_empty();
@@ -423,7 +445,19 @@ impl Engine {
             let is_active = state.killers.is_empty();
             if was_active != is_active {
                 changed = true;
+                if is_active {
+                    newly_restored.push(state.value);
+                } else {
+                    newly_killed.push(state.value);
+                }
             }
+        }
+
+        for &v in &newly_killed {
+            self.prune_reasons.insert((var, v), std::iter::once(cid).collect());
+        }
+        for &v in &newly_restored {
+            self.prune_reasons.remove(&(var, v));
         }
 
         if !self.has_active_value(var) {
@@ -448,19 +482,43 @@ impl Engine {
 
         for a in from_values {
             let has_support = self.has_support(cid, from, to, a, &relation);
-            let idx = self.variables[from.0].index_by_value[&a];
-            let state = &mut self.variables[from.0].domain[idx];
-            let was_active = state.killers.is_empty();
+
+            // Compute transitive reason before mutating domain.
+            // For each killed value in `to` that would have supported `a`, include its reason.
+            let new_reason: Option<HashSet<ConstraintId>> = if !has_support {
+                let mut reason = HashSet::new();
+                reason.insert(cid);
+                for state in &self.variables[to.0].domain {
+                    if !state.killers.is_empty() && relation(a, state.value) {
+                        if let Some(r) = self.prune_reasons.get(&(to, state.value)) {
+                            reason.extend(r.iter().copied());
+                        }
+                    }
+                }
+                Some(reason)
+            } else {
+                None
+            };
+
+            let idx = *self.variables[from.0].index_by_value.get(&a).unwrap();
+            let was_active = self.variables[from.0].domain[idx].killers.is_empty();
 
             if has_support {
-                state.killers.remove(&cid);
+                self.variables[from.0].domain[idx].killers.remove(&cid);
             } else {
-                state.killers.insert(cid);
+                self.variables[from.0].domain[idx].killers.insert(cid);
             }
 
-            let is_active = state.killers.is_empty();
+            let is_active = self.variables[from.0].domain[idx].killers.is_empty();
             if was_active != is_active {
                 changed = true;
+            }
+
+            if let Some(reason) = new_reason {
+                self.prune_reasons.insert((from, a), reason);
+            } else if is_active {
+                // Value restored (or still active): remove any stale reason.
+                self.prune_reasons.remove(&(from, a));
             }
         }
 
@@ -517,8 +575,13 @@ impl Engine {
     fn wipeout(&self, var: VarId) -> PropagationError {
         let mut explanation = HashSet::new();
         for state in &self.variables[var.0].domain {
-            for &cid in &state.killers {
-                explanation.insert(cid);
+            if !state.killers.is_empty() {
+                // Use transitive reason if available; fall back to direct killers.
+                if let Some(reason) = self.prune_reasons.get(&(var, state.value)) {
+                    explanation.extend(reason.iter().copied());
+                } else {
+                    explanation.extend(state.killers.iter().copied());
+                }
             }
         }
 
@@ -552,7 +615,7 @@ mod tests {
         let mut ac = Engine::new();
         let x = ac.add_var([1, 2, 3]);
 
-        let c = ac.add_constraint(Constraint::Forbid(x, 2));
+        let c = ac.new_constraint(Constraint::Forbid(x, 2));
         ac.assert(c).expect("forbid must propagate");
         assert_eq!(ac.val(x), vec![1, 3]);
 
@@ -569,7 +632,7 @@ mod tests {
         let a = ac.add_var([1, 2, 3]);
         let b = ac.add_var([2, 3, 4]);
 
-        let eq = ac.add_constraint(Constraint::Equality(a, b));
+        let eq = ac.new_constraint(Constraint::Equality(a, b));
         ac.assert(eq).expect("equality must propagate");
         assert_eq!(ac.val(a), vec![2, 3]);
         assert_eq!(ac.val(b), vec![2, 3]);
@@ -589,7 +652,7 @@ mod tests {
         let a = ac.add_var([1, 2, 3]);
         let b = ac.add_var([1, 2, 3]);
 
-        let eq = ac.new_eq(a, b).expect("eq must succeed");
+        let eq = ac.add_eq(a, b).expect("eq must succeed");
         let set = ac.set(a, 2).expect("set must succeed");
         assert_eq!(ac.val(a), vec![2]);
         assert_eq!(ac.val(b), vec![2]);
@@ -609,7 +672,7 @@ mod tests {
         let a = ac.add_var([1, 2, 3]);
         let b = ac.add_var([2, 3, 4]);
 
-        ac.new_eq(a, b).expect("equality must succeed");
+        ac.add_eq(a, b).expect("equality must succeed");
 
         // Intersection should be {2, 3}
         assert_eq!(ac.val(a), vec![2, 3]);
@@ -622,7 +685,7 @@ mod tests {
         let a = ac.add_var([1]);
         let b = ac.add_var([1, 2, 3]);
 
-        ac.new_neq(a, b).expect("inequality must succeed");
+        ac.add_neq(a, b).expect("inequality must succeed");
 
         // Since a is {1}, b cannot be 1.
         assert_eq!(ac.val(b), vec![2, 3]);
@@ -636,9 +699,9 @@ mod tests {
         let c = ac.add_var([1]);
 
         // Constraint 0: a != b  => a: {2, 3}
-        let id0 = ac.new_neq(a, b).expect("first neq must succeed");
+        let id0 = ac.add_neq(a, b).expect("first neq must succeed");
         // Constraint 1: a != c  => a: {2, 3}
-        let id1 = ac.new_neq(a, c).expect("second neq must succeed");
+        let id1 = ac.add_neq(a, c).expect("second neq must succeed");
 
         assert_eq!(ac.val(a), vec![2, 3]);
 
@@ -662,10 +725,10 @@ mod tests {
         let d = ac.add_var([3, 4, 5]);
 
         // Setup chain: a == b, b == d, a == c, c == d
-        ac.new_eq(a, b).expect("a==b");
-        ac.new_eq(b, d).expect("b==d");
-        ac.new_eq(a, c).expect("a==c");
-        ac.new_eq(c, d).expect("c==d");
+        ac.add_eq(a, b).expect("a==b");
+        ac.add_eq(b, d).expect("b==d");
+        ac.add_eq(a, c).expect("a==c");
+        ac.add_eq(c, d).expect("c==d");
 
         assert_eq!(ac.val(a), vec![3]);
         assert_eq!(ac.val(d), vec![3]);
@@ -679,8 +742,8 @@ mod tests {
         let b = ac.add_var([1, 2]);
         let c = ac.add_var([2, 3]);
 
-        ac.new_neq(a, b).expect("a!=b"); // forces b to {2}
-        ac.new_neq(b, c).expect("b!=c"); // forces c to {3}
+        ac.add_neq(a, b).expect("a!=b"); // forces b to {2}
+        ac.add_neq(b, c).expect("b!=c"); // forces c to {3}
 
         assert_eq!(ac.val(b), vec![2]);
         assert_eq!(ac.val(c), vec![3]);
@@ -716,7 +779,7 @@ mod tests {
         let a = ac.add_var([1, 2, 3]);
         let b = ac.add_var([2, 3]);
 
-        let eq_id = ac.new_eq(a, b).expect("equality must succeed");
+        let eq_id = ac.add_eq(a, b).expect("equality must succeed");
         let set_id = ac.set(a, 2).expect("set must succeed");
 
         // set(a,2) should propagate through equality to b
@@ -742,9 +805,9 @@ mod tests {
         let b1 = ac1.add_var([2, 3, 4]);
         let c1 = ac1.add_var([3, 4, 5]);
 
-        let id0 = ac1.add_constraint(Constraint::Equality(a1, b1));
-        let id1 = ac1.add_constraint(Constraint::Equality(b1, c1));
-        let id2 = ac1.add_constraint(Constraint::Set(a1, 3));
+        let id0 = ac1.new_constraint(Constraint::Equality(a1, b1));
+        let id1 = ac1.new_constraint(Constraint::Equality(b1, c1));
+        let id2 = ac1.new_constraint(Constraint::Set(a1, 3));
 
         ac1.assert_batch(&[id0, id1, id2]).expect("batch assert must succeed");
 
@@ -754,9 +817,9 @@ mod tests {
         let b2 = ac2.add_var([2, 3, 4]);
         let c2 = ac2.add_var([3, 4, 5]);
 
-        let id0 = ac2.add_constraint(Constraint::Equality(a2, b2));
-        let id1 = ac2.add_constraint(Constraint::Equality(b2, c2));
-        let id2 = ac2.add_constraint(Constraint::Set(a2, 3));
+        let id0 = ac2.new_constraint(Constraint::Equality(a2, b2));
+        let id1 = ac2.new_constraint(Constraint::Equality(b2, c2));
+        let id2 = ac2.new_constraint(Constraint::Set(a2, 3));
 
         ac2.assert(id0).expect("assert 0");
         ac2.assert(id1).expect("assert 1");
@@ -776,8 +839,8 @@ mod tests {
         let b1 = ac1.add_var([1, 2, 3]);
         let c1 = ac1.add_var([1, 2, 3]);
 
-        let id0 = ac1.new_eq(a1, b1).expect("eq 0");
-        let id1 = ac1.new_neq(b1, c1).expect("neq 1");
+        let id0 = ac1.add_eq(a1, b1).expect("eq 0");
+        let id1 = ac1.add_neq(b1, c1).expect("neq 1");
         let id2 = ac1.set(a1, 2).expect("set 2");
 
         let mut ac2 = Engine::new();
@@ -785,8 +848,8 @@ mod tests {
         let b2 = ac2.add_var([1, 2, 3]);
         let c2 = ac2.add_var([1, 2, 3]);
 
-        let id0_2 = ac2.new_eq(a2, b2).expect("eq 0");
-        let id1_2 = ac2.new_neq(b2, c2).expect("neq 1");
+        let id0_2 = ac2.add_eq(a2, b2).expect("eq 0");
+        let id1_2 = ac2.add_neq(b2, c2).expect("neq 1");
         let id2_2 = ac2.set(a2, 2).expect("set 2");
 
         // Batch retract
@@ -827,11 +890,40 @@ mod tests {
         });
 
         // Apply constraint that changes domains
-        ac.new_eq(a, b).expect("equality must succeed");
+        ac.add_eq(a, b).expect("equality must succeed");
 
         let notified = notified_vars.lock().unwrap();
         // Both a and b should have been notified during propagation
         assert!(notified.contains(&a), "Variable a should have been notified");
         assert!(notified.contains(&b), "Variable b should have been notified");
+    }
+
+    #[test]
+    fn test_three_way_inequality_conflict_explanation() {
+        // Three variables with domain {1, 2}, all mutually different.
+        // The system is globally unsatisfiable (pigeonhole), but AC-3 cannot
+        // detect this until a domain is narrowed externally.
+        let mut ac = Engine::new();
+        let x = ac.add_var([1, 2]);
+        let y = ac.add_var([1, 2]);
+        let z = ac.add_var([1, 2]);
+
+        // AC-3 accepts all three inequality constraints without conflict.
+        let neq_xy = ac.add_neq(x, y).expect("x!=y must be arc-consistent");
+        let neq_xz = ac.add_neq(x, z).expect("x!=z must be arc-consistent");
+        let neq_yz = ac.add_neq(y, z).expect("y!=z must be arc-consistent");
+
+        // Assigning x=1 triggers propagation and exposes the contradiction.
+        let set_x = ac.new_constraint(Constraint::Set(x, 1));
+        let err = ac.assert(set_x).expect_err("conflict must be detected after set(x,1)");
+
+        match err {
+            PropagationError::DomainWipeout { var: _, ref explanation } => {
+                assert!(explanation.contains(&neq_xy), "explanation must include x!=y");
+                assert!(explanation.contains(&neq_xz), "explanation must include x!=z");
+                assert!(explanation.contains(&neq_yz), "explanation must include y!=z");
+            }
+            other => panic!("expected DomainWipeout, got {:?}", other),
+        }
     }
 }
