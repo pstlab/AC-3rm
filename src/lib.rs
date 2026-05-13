@@ -489,10 +489,11 @@ impl Engine {
                 let mut reason = HashSet::new();
                 reason.insert(cid);
                 for state in &self.variables[to.0].domain {
-                    if !state.killers.is_empty() && relation(a, state.value) {
-                        if let Some(r) = self.prune_reasons.get(&(to, state.value)) {
-                            reason.extend(r.iter().copied());
-                        }
+                    if !state.killers.is_empty()
+                        && relation(a, state.value)
+                        && let Some(r) = self.prune_reasons.get(&(to, state.value))
+                    {
+                        reason.extend(r.iter().copied());
                     }
                 }
                 Some(reason)
