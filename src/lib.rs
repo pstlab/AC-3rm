@@ -1,7 +1,3 @@
-use crate::{
-    constraint::ConstraintEntry,
-    var::{ValueState, Variable},
-};
 pub use constraint::{Constraint, ConstraintId};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -26,6 +22,24 @@ struct Arc {
     constraint_id: ConstraintId,
     from: VarId,
     to: VarId,
+}
+
+#[derive(Debug, Clone)]
+struct ValueState {
+    value: i32,
+    killers: HashSet<ConstraintId>,
+}
+
+#[derive(Debug, Clone)]
+struct Variable {
+    domain: Vec<ValueState>,
+    index_by_value: HashMap<i32, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct ConstraintEntry {
+    active: bool,
+    kind: Constraint,
 }
 
 pub struct Engine {
@@ -90,7 +104,7 @@ impl Engine {
         let id = self.variables.len();
         trace!("Adding variable e{} with domain {{{}}}", id, states.iter().map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
         self.variables.push(Variable { domain: states, index_by_value });
-        VarId(id)
+        VarId::new(id)
     }
 
     /// Returns the currently active domain values of a variable.
@@ -100,7 +114,7 @@ impl Engine {
     /// # Panics
     /// Panics if `var_id` is not a valid variable ID.
     pub fn val(&self, var_id: VarId) -> Vec<i32> {
-        self.variables[var_id.0].domain.iter().filter_map(|state| if state.killers.is_empty() { Some(state.value) } else { None }).collect()
+        self.variables[*var_id].domain.iter().filter_map(|state| if state.killers.is_empty() { Some(state.value) } else { None }).collect()
     }
 
     /// Adds a constraint to the engine without activating it.
@@ -110,7 +124,7 @@ impl Engine {
         let id = self.constraints.len();
         trace!("Adding constraint c{}: {}", id, constraint);
         self.constraints.push(ConstraintEntry { active: false, kind: constraint });
-        ConstraintId(id)
+        ConstraintId::new(id)
     }
 
     /// Activates a constraint and propagates its effects.
@@ -120,13 +134,13 @@ impl Engine {
     /// # Errors
     /// Returns `PropagationError` if propagation causes a domain wipeout (no solution exists).
     pub fn assert(&mut self, constraint_id: ConstraintId) -> Result<(), PropagationError> {
-        trace!("Activating constraint c{}", self.constraints[constraint_id.0].kind);
+        trace!("Activating constraint c{}", self.constraints[*constraint_id].kind);
         let touched = self.constraint_vars(constraint_id)?;
-        if self.constraints[constraint_id.0].active {
+        if self.constraints[*constraint_id].active {
             return Ok(());
         }
 
-        self.constraints[constraint_id.0].active = true;
+        self.constraints[*constraint_id].active = true;
         self.propagate_from_vars(&touched)
     }
 
@@ -140,17 +154,17 @@ impl Engine {
     /// Returns `PropagationError` if re-propagation unexpectedly causes a domain wipeout.
     /// This should not happen in normal operation.
     pub fn retract(&mut self, constraint_id: ConstraintId) -> Result<(), PropagationError> {
-        trace!("Deactivating constraint c{}", self.constraints[constraint_id.0].kind);
+        trace!("Deactivating constraint c{}", self.constraints[*constraint_id].kind);
         let touched = self.constraint_vars(constraint_id)?;
-        if !self.constraints[constraint_id.0].active {
+        if !self.constraints[*constraint_id].active {
             return Ok(());
         }
 
-        self.constraints[constraint_id.0].active = false;
+        self.constraints[*constraint_id].active = false;
 
         let mut restored: Vec<(VarId, i32)> = Vec::new();
         for &var in &touched {
-            for state in &mut self.variables[var.0].domain {
+            for state in &mut self.variables[*var].domain {
                 let was_inactive = !state.killers.is_empty();
                 state.killers.remove(&constraint_id);
                 if was_inactive && state.killers.is_empty() {
@@ -245,10 +259,10 @@ impl Engine {
         let mut all_touched = HashSet::new();
 
         for &id in constraint_ids {
-            trace!("Activating constraint c{}", self.constraints[id.0].kind);
+            trace!("Activating constraint c{}", self.constraints[*id].kind);
             let touched = self.constraint_vars(id)?;
-            if !self.constraints[id.0].active {
-                self.constraints[id.0].active = true;
+            if !self.constraints[*id].active {
+                self.constraints[*id].active = true;
                 all_touched.extend(touched);
             }
         }
@@ -268,13 +282,13 @@ impl Engine {
         let mut restored: Vec<(VarId, i32)> = Vec::new();
 
         for &id in constraint_ids {
-            trace!("Deactivating constraint c{}", self.constraints[id.0].kind);
+            trace!("Deactivating constraint c{}", self.constraints[*id].kind);
             let touched = self.constraint_vars(id)?;
-            if self.constraints[id.0].active {
-                self.constraints[id.0].active = false;
+            if self.constraints[*id].active {
+                self.constraints[*id].active = false;
 
                 for &var in &touched {
-                    for state in &mut self.variables[var.0].domain {
+                    for state in &mut self.variables[*var].domain {
                         let was_inactive = !state.killers.is_empty();
                         state.killers.remove(&id);
                         if was_inactive && state.killers.is_empty() {
@@ -326,7 +340,7 @@ impl Engine {
     }
 
     fn constraint_vars(&self, constraint_id: ConstraintId) -> Result<Vec<VarId>, PropagationError> {
-        let Some(entry) = self.constraints.get(constraint_id.0) else {
+        let Some(entry) = self.constraints.get(*constraint_id) else {
             return Err(PropagationError::InvalidConstraintId(constraint_id));
         };
 
@@ -345,7 +359,7 @@ impl Engine {
     }
 
     fn arcs_of(&self, constraint_id: ConstraintId) -> Vec<Arc> {
-        match self.constraints[constraint_id.0].kind {
+        match self.constraints[*constraint_id].kind {
             Constraint::Equality(a, b) | Constraint::Inequality(a, b) => {
                 if a == b {
                     vec![Arc { constraint_id, from: a, to: b }]
@@ -373,7 +387,7 @@ impl Engine {
                     Constraint::Set(v, _) | Constraint::Forbid(v, _) => v == var,
                 };
 
-                if touches { Some(ConstraintId(id)) } else { None }
+                if touches { Some(ConstraintId::new(id)) } else { None }
             })
             .collect()
     }
@@ -394,10 +408,10 @@ impl Engine {
         }
 
         while let Some(arc) = queue.pop_front() {
-            trace!("Processing arc: {} (from e{} to e{})", self.constraints[arc.constraint_id.0].kind, arc.from, arc.to);
+            trace!("Processing arc: {} (from e{} to e{})", self.constraints[*arc.constraint_id].kind, arc.from, arc.to);
             in_queue.remove(&arc);
 
-            if !self.constraints[arc.constraint_id.0].active {
+            if !self.constraints[*arc.constraint_id].active {
                 continue;
             }
 
@@ -418,7 +432,7 @@ impl Engine {
     }
 
     fn revise(&mut self, arc: Arc) -> Result<bool, PropagationError> {
-        match self.constraints[arc.constraint_id.0].kind {
+        match self.constraints[*arc.constraint_id].kind {
             Constraint::Set(_, expected) => self.revise_unary(arc.constraint_id, arc.from, |a| a == expected),
             Constraint::Forbid(_, forbidden) => self.revise_unary(arc.constraint_id, arc.from, |a| a != forbidden),
             Constraint::Equality(_, _) => self.revise_binary(arc.constraint_id, arc.from, arc.to, |a, b| a == b),
@@ -434,7 +448,7 @@ impl Engine {
         let mut newly_killed: Vec<i32> = Vec::new();
         let mut newly_restored: Vec<i32> = Vec::new();
 
-        for state in &mut self.variables[var.0].domain {
+        for state in &mut self.variables[*var].domain {
             let was_active = state.killers.is_empty();
             if predicate(state.value) {
                 state.killers.remove(&cid);
@@ -465,7 +479,7 @@ impl Engine {
         }
 
         if changed {
-            trace!("Variable e{} domain is now {{{}}}", var, self.variables[var.0].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
+            trace!("Variable e{} domain is now {{{}}}", var, self.variables[*var].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(var);
         }
 
@@ -478,7 +492,7 @@ impl Engine {
     {
         let mut changed = false;
 
-        let from_values: Vec<i32> = self.variables[from.0].domain.iter().map(|s| s.value).collect();
+        let from_values: Vec<i32> = self.variables[*from].domain.iter().map(|s| s.value).collect();
 
         for a in from_values {
             let has_support = self.has_support(cid, from, to, a, &relation);
@@ -488,7 +502,7 @@ impl Engine {
             let new_reason: Option<HashSet<ConstraintId>> = if !has_support {
                 let mut reason = HashSet::new();
                 reason.insert(cid);
-                for state in &self.variables[to.0].domain {
+                for state in &self.variables[*to].domain {
                     if !state.killers.is_empty()
                         && relation(a, state.value)
                         && let Some(r) = self.prune_reasons.get(&(to, state.value))
@@ -501,16 +515,16 @@ impl Engine {
                 None
             };
 
-            let idx = *self.variables[from.0].index_by_value.get(&a).unwrap();
-            let was_active = self.variables[from.0].domain[idx].killers.is_empty();
+            let idx = *self.variables[*from].index_by_value.get(&a).unwrap();
+            let was_active = self.variables[*from].domain[idx].killers.is_empty();
 
             if has_support {
-                self.variables[from.0].domain[idx].killers.remove(&cid);
+                self.variables[*from].domain[idx].killers.remove(&cid);
             } else {
-                self.variables[from.0].domain[idx].killers.insert(cid);
+                self.variables[*from].domain[idx].killers.insert(cid);
             }
 
-            let is_active = self.variables[from.0].domain[idx].killers.is_empty();
+            let is_active = self.variables[*from].domain[idx].killers.is_empty();
             if was_active != is_active {
                 changed = true;
             }
@@ -528,7 +542,7 @@ impl Engine {
         }
 
         if changed {
-            trace!("Variable e{} domain is now {{{}}}", from, self.variables[from.0].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
+            trace!("Variable e{} domain is now {{{}}}", from, self.variables[*from].domain.iter().filter(|s| s.killers.is_empty()).map(|s| s.value.to_string()).collect::<Vec<_>>().join(", "));
             self.notify_listeners(from);
         }
 
@@ -548,7 +562,7 @@ impl Engine {
             return true;
         }
 
-        for state in &self.variables[to.0].domain {
+        for state in &self.variables[*to].domain {
             if !state.killers.is_empty() {
                 continue;
             }
@@ -563,19 +577,19 @@ impl Engine {
     }
 
     fn is_active_value(&self, var: VarId, value: i32) -> bool {
-        let Some(&idx) = self.variables[var.0].index_by_value.get(&value) else {
+        let Some(&idx) = self.variables[*var].index_by_value.get(&value) else {
             return false;
         };
-        self.variables[var.0].domain[idx].killers.is_empty()
+        self.variables[*var].domain[idx].killers.is_empty()
     }
 
     fn has_active_value(&self, var: VarId) -> bool {
-        self.variables[var.0].domain.iter().any(|s| s.killers.is_empty())
+        self.variables[*var].domain.iter().any(|s| s.killers.is_empty())
     }
 
     fn wipeout(&self, var: VarId) -> PropagationError {
         let mut explanation = HashSet::new();
-        for state in &self.variables[var.0].domain {
+        for state in &self.variables[*var].domain {
             if !state.killers.is_empty() {
                 // Use transitive reason if available; fall back to direct killers.
                 if let Some(reason) = self.prune_reasons.get(&(var, state.value)) {

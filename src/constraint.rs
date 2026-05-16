@@ -1,5 +1,5 @@
 use crate::VarId;
-use std::fmt;
+use std::{fmt, ops::Deref};
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -21,16 +21,24 @@ impl fmt::Display for Constraint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ConstraintId(pub(super) usize);
+pub struct ConstraintId(usize);
+
+impl ConstraintId {
+    pub(crate) fn new(index: usize) -> Self {
+        ConstraintId(index)
+    }
+}
+
+impl Deref for ConstraintId {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl fmt::Display for ConstraintId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "c{}", self.0)
     }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConstraintEntry {
-    pub(super) active: bool,
-    pub(super) kind: Constraint,
 }
